@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use s2n_quic::{Server};
 
 
@@ -18,21 +19,27 @@ async fn main() -> Result<()> {
     log::debug!("Server started on {}", server.local_addr()?);
 
     while let Some(mut connection) = server.accept().await {
-        log::debug!("Accepted connection from {}", connection.remote_addr()?);
+        let mut total_data_size = 0;
+        let remote_addr = connection.remote_addr()?;
+        log::debug!("Accepted connection from {}", &remote_addr);
 
         tokio::spawn(async move {
             while let Ok(Some(mut stream)) = connection.accept_bidirectional_stream().await {
                 tokio::spawn(async move {
                     while let Ok(Some(data)) = stream.receive().await {
-                        if let Err(e) = stream.send(data).await.context("Failed to send the data") {
-                            log::error!("Failed to send the data: {:?}", e);
-                            break;
-                        }
-                            
+                        // log::debug!("Received {} bytes", data.len());
+                        // if let Err(e) = stream.send(Bytes::from("Server received!")).await.context("Failed to send the data") {
+                        //     log::error!("Failed to send the data: {:?}", e);
+                        //     break;
+                        // }
+                        total_data_size += data.len();
                     }
+                    log::debug!("Total received data size: {} bytes", total_data_size);
                 });
             }
+            log::debug!("Connection from {} closed", &remote_addr);
         });
+        
     }
     Ok(())
 }

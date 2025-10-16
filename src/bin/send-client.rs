@@ -1,13 +1,26 @@
 use std::{net::SocketAddr, path::Path};
 
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use s2n_quic::{client::Connect, Client};
+use s2n_quic_sample::{operate_file::load_pcd_xyz, types};
 
 
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
         .init();
+
+    // Load the pcd file
+    let pcd_path = "data/input/removed-ceiling-clipped-cloud_registered_0_xyz.pcd";
+    let points = load_pcd_xyz(pcd_path)
+        .context("Failed to load PCD file")?;
+
+    log::debug!("Loaded {} points from PCD file", points.len());
+
+    let packet = types::PointCloudPacket::new(points.len(), points);
+    let json_packet = packet.to_json_bytes()?;
+    log::debug!("Serialized PointCloudPacket to JSON, size: {} bytes", json_packet.len());
 
     let client = Client::builder()
         .with_tls(Path::new("./certs/ca-cert.pem"))?
@@ -18,10 +31,13 @@ async fn main() -> Result<()> {
     let addr: SocketAddr = "127.0.0.1:4433".parse()
         .context("Failed to parse client ip")?;
     let connect = Connect::new(addr).with_server_name("localhost");
+    // let start = std::time::Instant::now();
     let mut connection = client.connect(connect).await
         .context("Failed to connect the server")?;
 
     connection.keep_alive(true)?;
+
+    let start = std::time::Instant::now();
 
     log::debug!("Client started on {}", client.local_addr()?);
 
@@ -29,15 +45,22 @@ async fn main() -> Result<()> {
     let stream = connection.open_bidirectional_stream().await?;
     let (mut receive_stream, mut send_stream) = stream.split();
 
-    // spawn a task that copies responses from the server to stdout
-    tokio::spawn(async move {
-        let mut stdout = tokio::io::stdout();
-        let _ = tokio::io::copy(&mut receive_stream, &mut stdout).await;
-    });
+    send_stream.send(Bytes::from(json_packet)).await
+        .context("Failed to send the json data")?;
+    log::debug!("Sent the data to the server");
 
-    // copy data from stdin and send it to the server
-    let mut stdin = tokio::io::stdin();
-    tokio::io::copy(&mut stdin, &mut send_stream).await?;
+    send_stream.finish()?;
+    log::debug!("Finished sending the data to the server");
+
+    while let Ok(Some(data)) = receive_stream.receive().await {
+        log::debug!("{:?}", data);
+    }
+
+    connection.close(0u32.into());  
+    log::debug!("Closed the connection");
+
+    let duration = start.elapsed();
+    log::debug!("Elapsed time: {:?}", duration);
 
     Ok(())
 }
