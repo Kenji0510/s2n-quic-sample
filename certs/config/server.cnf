@@ -12,7 +12,7 @@ countryName = US
 stateOrProvinceName = Washington
 localityName = Seattle
 organizationName = server
-commonName = server.localhost
+commonName = ikaros
 
 [v3_req]
 subjectAltName = @alt_names
@@ -21,4 +21,6 @@ subjectAltName = @alt_names
 subjectAltName = @alt_names
 
 [alt_names]
-DNS = localhost
+DNS = ikaros
+# Your server's ip address
+IP.1 = 192.168.0.36

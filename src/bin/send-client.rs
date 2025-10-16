@@ -19,18 +19,29 @@ async fn main() -> Result<()> {
     log::debug!("Loaded {} points from PCD file", points.len());
 
     let packet = types::PointCloudPacket::new(points.len(), points);
-    let json_packet = packet.to_json_bytes()?;
-    log::debug!("Serialized PointCloudPacket to JSON, size: {} bytes", json_packet.len());
+    // let json_packet = packet.to_json_bytes()?;
+    // log::debug!("Serialized PointCloudPacket to JSON, size: {} bytes", json_packet.len());
+
+    let send_data = bincode::serialize(&packet).context("Failed to transform the data to binary")?;
+    log::debug!("Serialized PointCloudPacket to binary, size: {} bytes", send_data.len());
+
+    let address: SocketAddr = "0.0.0.0:0".parse()?;
+
+    // set up an io provider with jumbo mtu and larger socket buffers
+    let io = s2n_quic::provider::io::Default::builder()
+        .with_max_mtu(1228)?
+        .with_receive_address(address)?
+        .build()?;
 
     let client = Client::builder()
         .with_tls(Path::new("./certs/ca-cert.pem"))?
-        .with_io("0.0.0.0:0")?
+        .with_io(io)?
         .start()
         .context("Failed to start client")?;
 
-    let addr: SocketAddr = "127.0.0.1:4433".parse()
+    let addr: SocketAddr = "192.168.0.36:4433".parse()
         .context("Failed to parse client ip")?;
-    let connect = Connect::new(addr).with_server_name("localhost");
+    let connect = Connect::new(addr).with_server_name("ikaros");
     // let start = std::time::Instant::now();
     let mut connection = client.connect(connect).await
         .context("Failed to connect the server")?;
@@ -45,7 +56,7 @@ async fn main() -> Result<()> {
     let stream = connection.open_bidirectional_stream().await?;
     let (mut receive_stream, mut send_stream) = stream.split();
 
-    send_stream.send(Bytes::from(json_packet)).await
+    send_stream.send(Bytes::from(send_data)).await
         .context("Failed to send the json data")?;
     log::debug!("Sent the data to the server");
 
