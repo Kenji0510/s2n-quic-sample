@@ -12,7 +12,7 @@ async fn main() -> Result<()> {
         .init();
 
     // Load the pcd file
-    let pcd_path = "data/input/removed-ceiling-clipped-cloud_registered_0_xyz.pcd";
+    let pcd_path = "data/input/removed-ceiling-output-003.pcd";
     let points = load_pcd_xyz(pcd_path)
         .context("Failed to load PCD file")?;
 
@@ -25,49 +25,72 @@ async fn main() -> Result<()> {
     let send_data = bincode::serialize(&packet).context("Failed to transform the data to binary")?;
     log::debug!("Serialized PointCloudPacket to binary, size: {} bytes", send_data.len());
 
-    let address: SocketAddr = "0.0.0.0:0".parse()?;
+    let server_addr = "192.168.0.36:4433";
+    let server_name = "ikaros";
+    
+    send_via_quic(send_data, server_addr, server_name).await?;
 
-    // set up an io provider with jumbo mtu and larger socket buffers
+    Ok(())
+}
+
+async fn send_via_quic(
+    data: Vec<u8>,
+    server_addr: &str,
+    server_name: &str,
+) -> Result<()> {
+    // let start = std::time::Instant::now();
+
+    // クライアントのアドレス
+    let local_address: SocketAddr = "0.0.0.0:0".parse()?;
+
+    // IO プロバイダーの設定
     let io = s2n_quic::provider::io::Default::builder()
         .with_max_mtu(1228)?
-        .with_receive_address(address)?
+        .with_receive_address(local_address)?
         .build()?;
 
+    // クライアントの作成
     let client = Client::builder()
         .with_tls(Path::new("./certs/ca-cert.pem"))?
         .with_io(io)?
         .start()
         .context("Failed to start client")?;
 
-    let addr: SocketAddr = "192.168.0.36:4433".parse()
-        .context("Failed to parse client ip")?;
-    let connect = Connect::new(addr).with_server_name("ikaros");
-    // let start = std::time::Instant::now();
-    let mut connection = client.connect(connect).await
-        .context("Failed to connect the server")?;
+    log::debug!("Client started on {}", client.local_addr()?);
 
-    connection.keep_alive(true)?;
+    // サーバーへの接続
+    let addr: SocketAddr = server_addr.parse()
+        .context("Failed to parse server address")?;
+    let connect = Connect::new(addr).with_server_name(server_name);
+    
+    let mut connection = client.connect(connect).await
+        .context("Failed to connect to the server")?;
 
     let start = std::time::Instant::now();
 
-    log::debug!("Client started on {}", client.local_addr()?);
+    connection.keep_alive(true)?;
 
-    // open a new stream and split the receiving and sending sides
+    // ストリームを開く
     let stream = connection.open_bidirectional_stream().await?;
     let (mut receive_stream, mut send_stream) = stream.split();
 
-    send_stream.send(Bytes::from(send_data)).await
-        .context("Failed to send the json data")?;
+    // データ送信
+    send_stream.send(Bytes::from(data)).await
+        .context("Failed to send the data")?;
     log::debug!("Sent the data to the server");
 
-    send_stream.finish()?;
+    // 送信完了
+    send_stream.finish()
+        .context("Failed to finish sending")?;
     log::debug!("Finished sending the data to the server");
 
-    while let Ok(Some(data)) = receive_stream.receive().await {
-        log::debug!("{:?}", data);
+    // サーバーからのレスポンスを受信
+    while let Ok(Some(response)) = receive_stream.receive().await {
+        log::debug!("Received response: {:?}", response);
     }
 
-    connection.close(0u32.into());  
+    // コネクションを閉じる
+    connection.close(0u32.into());
     log::debug!("Closed the connection");
 
     let duration = start.elapsed();
